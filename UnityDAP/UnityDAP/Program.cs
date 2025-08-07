@@ -7,6 +7,10 @@ namespace UnityDAP
 	{
 		static void Main(string[] args)
 		{
+			foreach(var arg in args)
+			{
+				Console.WriteLine(arg);
+			}
 			var processes = new ProcessList();
 			processes.Create();
 		}
@@ -15,13 +19,17 @@ namespace UnityDAP
 	{
 		readonly List<UnityProcess> processes = [];
 		readonly List<int> ports = [];
-		public override string ToString() => string.Join("\n", processes);
+		public override string ToString()
+		{
+			var procStr = string.Join("\n", processes); ;
+			var portStr = string.Join("\n", ports);
+			return $"processes:\n{procStr}\nports:\n{portStr}";
+		}
 		public void Create()
 		{
 			ScanProcess();
 			var task = Task.Run(CheckPorts);
 			task.Wait();
-			ShowPorts();
 			Console.WriteLine(ToString());
 		}
 		void ScanProcess()
@@ -31,14 +39,6 @@ namespace UnityDAP
 			{
 				Add(process);
 			}
-		}
-		void ShowPorts()
-		{
-			foreach(var port in ports)
-			{
-				Console.WriteLine($"Port: {port}");
-			}
-
 		}
 		async Task CheckPorts()
 		{
@@ -100,9 +100,7 @@ namespace UnityDAP
 		{
 			try
 			{
-				// TcpClientを使用して接続を試行
 				using var client = new TcpClient();
-				// タイムアウト設定
 				var connectTask = client.ConnectAsync(ip, port);
 				var timeoutTask = Task.Delay(500);
 				var completedTask = await Task.WhenAny(connectTask, timeoutTask);
@@ -113,7 +111,6 @@ namespace UnityDAP
 			}
 			catch(SocketException)
 			{
-				// 接続に失敗した場合
 				Console.WriteLine($"Port {port} is closed.");
 			}
 			catch(Exception ex)
@@ -158,10 +155,5 @@ namespace UnityDAP
 		{
 			return GetDebugPort() + 2;
 		}
-		//	IPEndPoint GetIPEndPoint()
-		//	{
-		//int num = FindFirstPortInRange(unityProcess, listeners, 55000, 55999);
-		//		return null;
-		//	}
 	}
 }
