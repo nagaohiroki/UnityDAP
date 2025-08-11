@@ -8,17 +8,17 @@ namespace UnityDAP
 {
 	internal class Program
 	{
-		static void Main(string[] args)
+		static async Task Main(string[] args)
 		{
 			foreach(var arg in args)
 			{
 				Console.WriteLine(arg);
 			}
-			var unityProcesses = new ProcessList();
-			unityProcesses.Create();
+			var unityProcesses = new UnityProcessList();
+			await unityProcesses.Create();
 		}
 	}
-	public partial class ProcessList
+	public partial class UnityProcessList
 	{
 		readonly List<UnityProcess> unityProcesses = [];
 		readonly Regex parseUnityInfo = MyRegex();
@@ -27,27 +27,26 @@ namespace UnityDAP
 			var procStr = string.Join("\n", unityProcesses); ;
 			return $"unityProcesses:\n{procStr}\n";
 		}
-		public void Create()
+		public async Task Create()
 		{
 			ScanProcess();
-			var task = UnityPlayerInfo();
-			task.Wait();
+			await UnityPlayerInfo();
 			Console.WriteLine(ToString());
 		}
 		async Task UnityPlayerInfo()
 		{
 			if(unityProcesses.Count == 0) { return; }
-			var multicastAddress = IPAddress.Parse("225.0.0.222");
-			var multicastPorts = new[] { 54997, 34997, 57997, 58997 };
+			var unityAddress = IPAddress.Parse("225.0.0.222");
+			var unityPorts = new[] { 54997, 34997, 57997, 58997 };
 			var ipAddresses = IPAddressList();
 			var cts = new CancellationTokenSource();
 			List<Task> tasks = [];
 			List<UdpSocketInfo> sockets = [];
 			foreach(var ipAddress in ipAddresses)
 			{
-				foreach(var multicastPort in multicastPorts)
+				foreach(var unityPort in unityPorts)
 				{
-					var socket = new UdpSocketInfo(cts, Receive, multicastAddress, multicastPort, ipAddress);
+					var socket = new UdpSocketInfo(cts, Receive, unityAddress, unityPort, ipAddress);
 					sockets.Add(socket);
 					tasks.Add(Task.Run(socket.StartReceivingLoop));
 				}
@@ -74,15 +73,9 @@ namespace UnityDAP
 				}
 				var infoText = Encoding.UTF8.GetString(bytes);
 				var match = parseUnityInfo.Match(infoText);
-				if(!match.Success)
-				{
-					continue;
-				}
+				if(!match.Success) { continue; }
 				var projectName = match.Groups["ProjectName"].Value;
-				if(projectName.CompareTo(unityProcess.name) != 0)
-				{
-					continue;
-				}
+				if(projectName.CompareTo(unityProcess.name) != 0) { continue; }
 				var guid = match.Groups["Guid"].Value;
 				var ip = match.Groups["IP"].Value;
 				unityProcess.GuidToPorts(ip, int.Parse(guid));
@@ -112,7 +105,7 @@ namespace UnityDAP
 					runtime = UnityProcess.Runtime.Editor;
 				}
 				if(runtime == UnityProcess.Runtime.None) { continue; }
-				unityProcesses.Add(new UnityProcess(process, runtime));
+				unityProcesses.Add(new(process, runtime));
 			}
 		}
 		static bool IsEditor(Process process)
@@ -122,8 +115,7 @@ namespace UnityDAP
 		}
 		static bool IsWindowsApp(Process process)
 		{
-			if(process.MainWindowHandle == IntPtr.Zero) { return false; }
-			if(process.MainModule == null) { return false; }
+			if(process.MainWindowHandle == IntPtr.Zero || process.MainModule == null) { return false; }
 			var fileName = process.MainModule.FileName;
 			var directory = Path.GetDirectoryName(fileName);
 			if(directory == null) { return false; }
@@ -136,9 +128,10 @@ namespace UnityDAP
 			var networkList = NetworkInterface.GetAllNetworkInterfaces();
 			foreach(var network in networkList)
 			{
-				if(!network.SupportsMulticast ||
-				network.NetworkInterfaceType == NetworkInterfaceType.Loopback ||
-				network.OperationalStatus != OperationalStatus.Up) { continue; }
+				if(!network.SupportsMulticast || network.NetworkInterfaceType == NetworkInterfaceType.Loopback || network.OperationalStatus != OperationalStatus.Up)
+				{
+					continue;
+				}
 				var properties = network.GetIPProperties();
 				if(properties == null) { continue; }
 				var unicastAddresses = properties.UnicastAddresses;
@@ -231,7 +224,7 @@ namespace UnityDAP
 			}
 			catch(Exception ex)
 			{
-				Console.WriteLine($"エラー: {ex.Message}");
+				Console.WriteLine($"error: {ex.Message}");
 			}
 			finally
 			{
@@ -248,8 +241,6 @@ namespace UnityDAP
 			if(disposing && udpClient != null)
 			{
 				cts.Cancel();
-				Task.Delay(1000).Wait(); // 短い遅延を追加
-
 				udpClient.Close();
 				udpClient = null;
 			}
@@ -275,4 +266,3 @@ namespace UnityDAP
 		}
 	}
 }
-
