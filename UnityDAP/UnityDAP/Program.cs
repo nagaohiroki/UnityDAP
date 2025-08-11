@@ -1,6 +1,9 @@
 ﻿using System.Diagnostics;
 using System.Net;
+using System.Net.NetworkInformation;
 using System.Net.Sockets;
+using System.Text;
+using System.Text.RegularExpressions;
 namespace UnityDAP
 {
 	internal class Program
@@ -11,64 +14,106 @@ namespace UnityDAP
 			{
 				Console.WriteLine(arg);
 			}
-			var processes = new ProcessList();
-			processes.Create();
+			var unityProcesses = new ProcessList();
+			unityProcesses.Create();
 		}
 	}
-	public class ProcessList
+	public partial class ProcessList
 	{
-		readonly List<UnityProcess> processes = [];
-		readonly List<int> ports = [];
+		readonly List<UnityProcess> unityProcesses = [];
+		readonly Regex parseUnityInfo = MyRegex();
 		public override string ToString()
 		{
-			var procStr = string.Join("\n", processes); ;
-			var portStr = string.Join("\n", ports);
-			return $"processes:\n{procStr}\nports:\n{portStr}";
+			var procStr = string.Join("\n", unityProcesses); ;
+			return $"unityProcesses:\n{procStr}\n";
 		}
 		public void Create()
 		{
 			ScanProcess();
-			var task = Task.Run(CheckPorts);
+			var task = UnityPlayerInfo();
 			task.Wait();
 			Console.WriteLine(ToString());
 		}
-		void ScanProcess()
+		async Task UnityPlayerInfo()
 		{
-			var processes = Process.GetProcesses();
-			foreach(var process in processes)
+			if(unityProcesses.Count == 0) { return; }
+			var multicastAddress = IPAddress.Parse("225.0.0.222");
+			var multicastPorts = new[] { 54997, 34997, 57997, 58997 };
+			var ipAddresses = IPAddressList();
+			var cts = new CancellationTokenSource();
+			List<Task> tasks = [];
+			List<UdpSocketInfo> sockets = [];
+			foreach(var ipAddress in ipAddresses)
 			{
-				Add(process);
-			}
-		}
-		async Task CheckPorts()
-		{
-			var hostName = Dns.GetHostName();
-			var address = Dns.GetHostEntry(hostName);
-			IPAddress? interNetwork = null;
-			foreach(var ip in address.AddressList)
-			{
-				if(ip.AddressFamily == AddressFamily.InterNetwork)
+				foreach(var multicastPort in multicastPorts)
 				{
-					interNetwork = ip;
+					var socket = new UdpSocketInfo(cts, Receive, multicastAddress, multicastPort, ipAddress);
+					sockets.Add(socket);
+					tasks.Add(Task.Run(socket.StartReceivingLoop));
 				}
 			}
-			if(interNetwork == null) { return; }
-			Console.WriteLine($"IP Address: {interNetwork}");
-			await ScanPorts(interNetwork.MapToIPv4().ToString(), 56000, 56999);
+			int timeoutMilliseconds = 5000;
+			var timeoutTask = Task.Delay(timeoutMilliseconds);
+			await Task.WhenAny(Task.WhenAll(tasks), timeoutTask);
+			if(timeoutTask.IsCompleted)
+			{
+				Console.WriteLine($"timeout {timeoutMilliseconds}ms");
+			}
+			foreach(var socket in sockets)
+			{
+				socket.Dispose();
+			}
 		}
-		void Add(Process process)
+		bool Receive(byte[] bytes)
 		{
-			var runtime = UnityProcess.Runtime.None;
-			if(IsWindowsApp(process))
+			foreach(var unityProcess in unityProcesses)
 			{
-				runtime = UnityProcess.Runtime.Player;
+				if(unityProcess.runtime != UnityProcess.Runtime.Player || unityProcess.hasAddress)
+				{
+					continue;
+				}
+				var infoText = Encoding.UTF8.GetString(bytes);
+				var match = parseUnityInfo.Match(infoText);
+				if(!match.Success)
+				{
+					continue;
+				}
+				var projectName = match.Groups["ProjectName"].Value;
+				if(projectName.CompareTo(unityProcess.name) != 0)
+				{
+					continue;
+				}
+				var guid = match.Groups["Guid"].Value;
+				var ip = match.Groups["IP"].Value;
+				unityProcess.GuidToPorts(ip, int.Parse(guid));
 			}
-			if(IsEditor(process))
+			bool hasAddress = true;
+			foreach(var unityProcess in unityProcesses)
 			{
-				runtime = UnityProcess.Runtime.Editor;
+				if(!unityProcess.hasAddress)
+				{
+					hasAddress = false;
+				}
 			}
-			if(runtime == UnityProcess.Runtime.None) { return; }
-			processes.Add(new UnityProcess(process));
+			return hasAddress;
+		}
+		void ScanProcess()
+		{
+			var procs = Process.GetProcesses();
+			foreach(var process in procs)
+			{
+				var runtime = UnityProcess.Runtime.None;
+				if(IsWindowsApp(process))
+				{
+					runtime = UnityProcess.Runtime.Player;
+				}
+				if(IsEditor(process))
+				{
+					runtime = UnityProcess.Runtime.Editor;
+				}
+				if(runtime == UnityProcess.Runtime.None) { continue; }
+				unityProcesses.Add(new UnityProcess(process, runtime));
+			}
 		}
 		static bool IsEditor(Process process)
 		{
@@ -85,39 +130,30 @@ namespace UnityDAP
 			if(!File.Exists(Path.Combine(directory, "UnityPlayer.dll"))) { return false; }
 			return true;
 		}
-		async Task ScanPorts(string ipAddress, int startPort, int endPort)
+		static List<IPAddress> IPAddressList()
 		{
-			var ip = IPAddress.Parse(ipAddress);
-			var tasks = new List<Task>();
-
-			for(int port = startPort; port <= endPort; port++)
+			var ipAddresses = new List<IPAddress>();
+			var networkList = NetworkInterface.GetAllNetworkInterfaces();
+			foreach(var network in networkList)
 			{
-				tasks.Add(CheckPortAsync(ip, port));
-			}
-			await Task.WhenAll(tasks);
-		}
-		async Task CheckPortAsync(IPAddress ip, int port)
-		{
-			try
-			{
-				using var client = new TcpClient();
-				var connectTask = client.ConnectAsync(ip, port);
-				var timeoutTask = Task.Delay(500);
-				var completedTask = await Task.WhenAny(connectTask, timeoutTask);
-				if(completedTask == connectTask)
+				if(!network.SupportsMulticast ||
+				network.NetworkInterfaceType == NetworkInterfaceType.Loopback ||
+				network.OperationalStatus != OperationalStatus.Up) { continue; }
+				var properties = network.GetIPProperties();
+				if(properties == null) { continue; }
+				var unicastAddresses = properties.UnicastAddresses;
+				foreach(var address in unicastAddresses)
 				{
-					ports.Add(port);
+					if(address.Address.AddressFamily == AddressFamily.InterNetwork)
+					{
+						ipAddresses.Add(address.Address);
+					}
 				}
 			}
-			catch(SocketException)
-			{
-				Console.WriteLine($"Port {port} is closed.");
-			}
-			catch(Exception ex)
-			{
-				Console.WriteLine($"Error checking port {port}: {ex.Message}");
-			}
+			return ipAddresses;
 		}
+		[GeneratedRegex(@"\[IP\]\s(?<IP>\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})\s\[Port\]\s(?<Port>\d+)\s\[Flags\]\s(?<Flags>\d+)\s\[Guid\]\s(?<Guid>\d+)\s\[EditorId\]\s(?<EditorId>\d+)\s\[Version\]\s(?<Version>\d+)\s\[Id\]\s(?<Id>.*?)\s\[Debug\]\s(?<Debug>\d+)\s\[PackageName\]\s(?<PackageName>.*?)\s\[ProjectName\]\s(?<ProjectName>.*)")]
+		private static partial Regex MyRegex();
 	}
 	public class UnityProcess
 	{
@@ -126,6 +162,9 @@ namespace UnityDAP
 			Windows,
 			Linux,
 			OSX,
+			iOS,
+			Android,
+			WebGL
 		}
 		public enum Runtime
 		{
@@ -138,13 +177,25 @@ namespace UnityDAP
 		public int debugPort { get; set; }
 		public int messagePort { get; set; }
 		public string name { get; set; } = string.Empty;
-		public override string ToString() => $" {name}:{Id} ,address:{address} ,debug:{debugPort}, message:{messagePort}";
-		public UnityProcess(Process process)
+		public Runtime runtime { get; set; }
+		public bool hasAddress => !string.IsNullOrEmpty(address);
+		public override string ToString() => $" {name}:{Id} ,address:{address} ,debug:{debugPort}, message:{messagePort}, runtime:{runtime}";
+		public UnityProcess(Process process, Runtime inRuntime)
 		{
 			Id = process.Id;
-			name = process.ProcessName;
-			address = "127.0.0.1";
+			name = process.MainWindowTitle;
 			debugPort = GetDebugPort();
+			messagePort = GetMessagePort();
+			runtime = inRuntime;
+			if(runtime == Runtime.Editor)
+			{
+				address = "127.0.0.1";
+			}
+		}
+		public void GuidToPorts(string inAddress, int guid)
+		{
+			address = inAddress;
+			debugPort = 56000 + (guid % 1000);
 			messagePort = GetMessagePort();
 		}
 		int GetDebugPort()
@@ -156,4 +207,72 @@ namespace UnityDAP
 			return GetDebugPort() + 2;
 		}
 	}
+	public class UdpSocketInfo(CancellationTokenSource cts, UdpSocketInfo.Receive receive, IPAddress? address, int port, IPAddress? iface = null, int ttl = 4) : IDisposable
+	{
+		UdpClient? udpClient = CreateUdpClient(address, port, iface, ttl);
+		public delegate bool Receive(byte[] bytes);
+		readonly Receive receive = receive;
+		public async Task StartReceivingLoop()
+		{
+			if(udpClient == null) { return; }
+			try
+			{
+				while(!cts.Token.IsCancellationRequested)
+				{
+					var result = await udpClient.ReceiveAsync(cts.Token);
+					if(receive(result.Buffer))
+					{
+						cts.Cancel();
+					}
+				}
+			}
+			catch(OperationCanceledException)
+			{
+			}
+			catch(Exception ex)
+			{
+				Console.WriteLine($"エラー: {ex.Message}");
+			}
+			finally
+			{
+				Dispose(true);
+			}
+		}
+		public void Dispose()
+		{
+			Dispose(true);
+			GC.SuppressFinalize(this);
+		}
+		protected virtual void Dispose(bool disposing)
+		{
+			if(disposing && udpClient != null)
+			{
+				cts.Cancel();
+				Task.Delay(1000).Wait(); // 短い遅延を追加
+
+				udpClient.Close();
+				udpClient = null;
+			}
+		}
+		static UdpClient CreateUdpClient(IPAddress? address, int port, IPAddress? iface = null, int ttl = 4)
+		{
+			var udpClient = new UdpClient();
+			udpClient.Client.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.ReuseAddress, true);
+			udpClient.Client.Bind(new IPEndPoint(IPAddress.Any, port));
+			if(address != null)
+			{
+				if(iface != null)
+				{
+					udpClient.JoinMulticastGroup(address, iface);
+				}
+				else
+				{
+					udpClient.JoinMulticastGroup(address);
+				}
+			}
+			udpClient.Client.SetSocketOption(SocketOptionLevel.IP, SocketOptionName.MulticastTimeToLive, ttl);
+			return udpClient;
+		}
+	}
 }
+
