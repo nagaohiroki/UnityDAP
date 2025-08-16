@@ -30,7 +30,10 @@ namespace UnityDAP
 		public async Task Create()
 		{
 			ScanProcess();
-			await UnityPlayerInfo();
+			if(!HasAddress())
+			{
+				await UnityPlayerInfo();
+			}
 			Console.WriteLine(ToString());
 		}
 		async Task UnityPlayerInfo()
@@ -80,15 +83,18 @@ namespace UnityDAP
 				var ip = match.Groups["IP"].Value;
 				unityProcess.GuidToPorts(ip, int.Parse(guid));
 			}
-			bool hasAddress = true;
+			return HasAddress();
+		}
+		bool HasAddress()
+		{
 			foreach(var unityProcess in unityProcesses)
 			{
 				if(!unityProcess.hasAddress)
 				{
-					hasAddress = false;
+					return false;
 				}
 			}
-			return hasAddress;
+			return true;
 		}
 		void ScanProcess()
 		{
