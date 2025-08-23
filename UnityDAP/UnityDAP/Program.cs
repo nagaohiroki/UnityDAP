@@ -75,9 +75,11 @@ namespace UnityDAP
 					continue;
 				}
 				var infoText = Encoding.UTF8.GetString(bytes);
+				Console.WriteLine(infoText);
 				var match = parseUnityInfo.Match(infoText);
 				if(!match.Success) { continue; }
 				var projectName = match.Groups["ProjectName"].Value;
+				Console.WriteLine($"match:{projectName}/{unityProcess.name}");
 				if(projectName.CompareTo(unityProcess.name) != 0) { continue; }
 				var guid = match.Groups["Guid"].Value;
 				var ip = match.Groups["IP"].Value;
@@ -102,7 +104,7 @@ namespace UnityDAP
 			foreach(var process in procs)
 			{
 				var runtime = UnityProcess.Runtime.None;
-				if(IsWindowsApp(process))
+				if(IsMacApp(process) || IsWindowsApp(process))
 				{
 					runtime = UnityProcess.Runtime.Player;
 				}
@@ -116,16 +118,22 @@ namespace UnityDAP
 		}
 		static bool IsEditor(Process process)
 		{
-			if(process.MainWindowHandle == IntPtr.Zero) { return false; }
 			return process.ProcessName == "Unity";
 		}
 		static bool IsWindowsApp(Process process)
 		{
-			if(process.MainWindowHandle == IntPtr.Zero || process.MainModule == null) { return false; }
-			var fileName = process.MainModule.FileName;
-			var directory = Path.GetDirectoryName(fileName);
+			if(process.MainModule == null) { return false; }
+			var directory = Path.GetDirectoryName(process.MainModule.FileName);
 			if(directory == null) { return false; }
 			if(!File.Exists(Path.Combine(directory, "UnityPlayer.dll"))) { return false; }
+			return true;
+		}
+		static bool IsMacApp(Process process)
+		{
+			if(process.MainModule == null) { return false; }
+			var directory = Path.GetDirectoryName(Path.GetDirectoryName(process.MainModule.FileName));
+			if(directory == null) { return false; }
+			if(!File.Exists(Path.Combine(directory, "Frameworks", "UnityPlayer.dylib"))) { return false; }
 			return true;
 		}
 		static List<IPAddress> IPAddressList()
@@ -182,7 +190,10 @@ namespace UnityDAP
 		public UnityProcess(Process process, Runtime inRuntime)
 		{
 			Id = process.Id;
-			name = process.MainWindowTitle;
+			if(process.MainModule != null)
+			{
+				name = Path.GetFileNameWithoutExtension(process.MainModule.ModuleName);
+			}
 			debugPort = GetDebugPort();
 			messagePort = GetMessagePort();
 			runtime = inRuntime;
