@@ -4,6 +4,7 @@ using System.Net.NetworkInformation;
 using System.Net.Sockets;
 using System.Text;
 using System.Text.RegularExpressions;
+using System.Runtime.InteropServices;
 namespace UnityDAP
 {
 	internal class Program
@@ -75,15 +76,13 @@ namespace UnityDAP
 					continue;
 				}
 				var infoText = Encoding.UTF8.GetString(bytes);
-				Console.WriteLine(infoText);
 				var match = parseUnityInfo.Match(infoText);
 				if(!match.Success) { continue; }
 				var projectName = match.Groups["ProjectName"].Value;
-				Console.WriteLine($"match:{projectName}/{unityProcess.name}");
 				if(projectName.CompareTo(unityProcess.name) != 0) { continue; }
 				var guid = match.Groups["Guid"].Value;
 				var ip = match.Groups["IP"].Value;
-				unityProcess.GuidToPorts(ip, int.Parse(guid));
+				unityProcess.GuidToPorts(ip, long.Parse(guid));
 			}
 			return HasAddress();
 		}
@@ -103,38 +102,55 @@ namespace UnityDAP
 			var procs = Process.GetProcesses();
 			foreach(var process in procs)
 			{
-				var runtime = UnityProcess.Runtime.None;
-				if(IsMacApp(process) || IsWindowsApp(process))
-				{
-					runtime = UnityProcess.Runtime.Player;
-				}
-				if(IsEditor(process))
-				{
-					runtime = UnityProcess.Runtime.Editor;
-				}
+				var runtime = GetUnityRuntime(process);
 				if(runtime == UnityProcess.Runtime.None) { continue; }
 				unityProcesses.Add(new(process, runtime));
 			}
 		}
-		static bool IsEditor(Process process)
+		static UnityProcess.Runtime GetUnityRuntime(Process process)
 		{
-			return process.ProcessName == "Unity";
-		}
-		static bool IsWindowsApp(Process process)
-		{
-			if(process.MainModule == null) { return false; }
+			if(RuntimeInformation.IsOSPlatform(OSPlatform.Windows) && process.MainWindowHandle == IntPtr.Zero)
+			{
+				return UnityProcess.Runtime.None;
+			}
+			if(process.ProcessName == "Unity")
+			{
+				return UnityProcess.Runtime.Editor;
+			}
+			if(process.MainModule == null)
+			{
+				return UnityProcess.Runtime.None;
+			}
 			var directory = Path.GetDirectoryName(process.MainModule.FileName);
-			if(directory == null) { return false; }
-			if(!File.Exists(Path.Combine(directory, "UnityPlayer.dll"))) { return false; }
-			return true;
-		}
-		static bool IsMacApp(Process process)
-		{
-			if(process.MainModule == null) { return false; }
-			var directory = Path.GetDirectoryName(Path.GetDirectoryName(process.MainModule.FileName));
-			if(directory == null) { return false; }
-			if(!File.Exists(Path.Combine(directory, "Frameworks", "UnityPlayer.dylib"))) { return false; }
-			return true;
+			if(directory == null)
+			{
+				return UnityProcess.Runtime.None;
+			}
+			if(RuntimeInformation.IsOSPlatform(OSPlatform.OSX))
+			{
+				var dir = Path.GetDirectoryName(directory);
+				if(dir == null)
+				{
+					return UnityProcess.Runtime.None;
+				}
+				if(File.Exists(Path.Combine(dir, "Frameworks", "UnityPlayer.dylib")))
+				{
+					return UnityProcess.Runtime.Player;
+				}
+			}
+			if(RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
+			{
+				if(File.Exists(Path.Combine(directory, "UnityPlayer.dll")))
+				{
+					return UnityProcess.Runtime.Player;
+				}
+			}
+			if(RuntimeInformation.IsOSPlatform(OSPlatform.Linux))
+			{
+				// TODO Linux
+				return UnityProcess.Runtime.None;
+			}
+			return UnityProcess.Runtime.None;
 		}
 		static List<IPAddress> IPAddressList()
 		{
@@ -202,10 +218,10 @@ namespace UnityDAP
 				address = "127.0.0.1";
 			}
 		}
-		public void GuidToPorts(string inAddress, int guid)
+		public void GuidToPorts(string inAddress, long guid)
 		{
 			address = inAddress;
-			debugPort = 56000 + (guid % 1000);
+			debugPort = 56000 + (int)(guid % 1000);
 			messagePort = GetMessagePort();
 		}
 		int GetDebugPort()
