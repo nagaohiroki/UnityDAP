@@ -42,18 +42,14 @@ namespace UnityDAP
 			if(unityProcesses.Count == 0) { return; }
 			var unityAddress = IPAddress.Parse("225.0.0.222");
 			var unityPorts = new[] { 54997, 34997, 57997, 58997 };
-			var ipAddresses = IPAddressList();
 			var cts = new CancellationTokenSource();
 			List<Task> tasks = [];
 			List<UdpSocketInfo> sockets = [];
-			foreach(var ipAddress in ipAddresses)
+			foreach(var unityPort in unityPorts)
 			{
-				foreach(var unityPort in unityPorts)
-				{
-					var socket = new UdpSocketInfo(cts, Receive, unityAddress, unityPort, ipAddress);
-					sockets.Add(socket);
-					tasks.Add(Task.Run(socket.StartReceivingLoop));
-				}
+				var socket = new UdpSocketInfo(cts, Receive, unityAddress, unityPort);
+				sockets.Add(socket);
+				tasks.Add(Task.Run(socket.StartReceivingLoop));
 			}
 			int timeoutMilliseconds = 5000;
 			var timeoutTask = Task.Delay(timeoutMilliseconds);
@@ -151,29 +147,6 @@ namespace UnityDAP
 				return UnityProcess.Runtime.None;
 			}
 			return UnityProcess.Runtime.None;
-		}
-		static List<IPAddress> IPAddressList()
-		{
-			var ipAddresses = new List<IPAddress>();
-			var networkList = NetworkInterface.GetAllNetworkInterfaces();
-			foreach(var network in networkList)
-			{
-				if(!network.SupportsMulticast || network.NetworkInterfaceType == NetworkInterfaceType.Loopback || network.OperationalStatus != OperationalStatus.Up)
-				{
-					continue;
-				}
-				var properties = network.GetIPProperties();
-				if(properties == null) { continue; }
-				var unicastAddresses = properties.UnicastAddresses;
-				foreach(var address in unicastAddresses)
-				{
-					if(address.Address.AddressFamily == AddressFamily.InterNetwork)
-					{
-						ipAddresses.Add(address.Address);
-					}
-				}
-			}
-			return ipAddresses;
 		}
 		[GeneratedRegex(@"\[IP\]\s(?<IP>\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})\s\[Port\]\s(?<Port>\d+)\s\[Flags\]\s(?<Flags>\d+)\s\[Guid\]\s(?<Guid>\d+)\s\[EditorId\]\s(?<EditorId>\d+)\s\[Version\]\s(?<Version>\d+)\s\[Id\]\s(?<Id>.*?)\s\[Debug\]\s(?<Debug>\d+)\s\[PackageName\]\s(?<PackageName>.*?)\s\[ProjectName\]\s(?<ProjectName>.*)")]
 		private static partial Regex MyRegex();
