@@ -4,7 +4,6 @@ using System.Net.NetworkInformation;
 using System.Net.Sockets;
 using System.Text;
 using System.Text.RegularExpressions;
-using System.Runtime.InteropServices;
 namespace UnityDAP
 {
 	internal class Program
@@ -31,25 +30,25 @@ namespace UnityDAP
 		public async Task Create()
 		{
 			ScanProcess();
-			if(!HasAddress())
-			{
-				await UnityPlayerInfo();
-			}
+			await UnityPlayerInfo();
 			Console.WriteLine(ToString());
 		}
 		async Task UnityPlayerInfo()
 		{
-			if(unityProcesses.Count == 0) { return; }
 			var unityAddress = IPAddress.Parse("225.0.0.222");
 			var unityPorts = new[] { 54997, 34997, 57997, 58997 };
 			var cts = new CancellationTokenSource();
 			List<Task> tasks = [];
 			List<UdpSocketInfo> sockets = [];
-			foreach(var unityPort in unityPorts)
+			var ipAddresses = IPAddressList();
+			foreach(var address in ipAddresses)
 			{
-				var socket = new UdpSocketInfo(cts, Receive, unityAddress, unityPort);
-				sockets.Add(socket);
-				tasks.Add(Task.Run(socket.StartReceivingLoop));
+				foreach(var unityPort in unityPorts)
+				{
+					var socket = new UdpSocketInfo(cts, Receive, unityAddress, unityPort, address);
+					sockets.Add(socket);
+					tasks.Add(Task.Run(socket.StartReceivingLoop));
+				}
 			}
 			int timeoutMilliseconds = 5000;
 			var timeoutTask = Task.Delay(timeoutMilliseconds);
@@ -65,88 +64,65 @@ namespace UnityDAP
 		}
 		bool Receive(byte[] bytes)
 		{
-			foreach(var unityProcess in unityProcesses)
+			var infoText = Encoding.UTF8.GetString(bytes);
+			Console.WriteLine(infoText);
+			var match = parseUnityInfo.Match(infoText);
+			if(!match.Success) { return false; }
+			var projectName = match.Groups["ProjectName"].Value;
+			var guidStr = match.Groups["Guid"].Value;
+			var ip = match.Groups["IP"].Value;
+			if(long.TryParse(guidStr, out var guid))
 			{
-				if(unityProcess.runtime != UnityProcess.Runtime.Player || unityProcess.hasAddress)
-				{
-					continue;
-				}
-				var infoText = Encoding.UTF8.GetString(bytes);
-				var match = parseUnityInfo.Match(infoText);
-				if(!match.Success) { continue; }
-				var projectName = match.Groups["ProjectName"].Value;
-				if(projectName.CompareTo(unityProcess.name) != 0) { continue; }
-				var guid = match.Groups["Guid"].Value;
-				var ip = match.Groups["IP"].Value;
-				unityProcess.GuidToPorts(ip, long.Parse(guid));
+				var process = new UnityProcess(ip, projectName, guid);
+				if(Contains(process)) { return true; }
+				unityProcesses.Add(process);
 			}
-			return HasAddress();
-		}
-		bool HasAddress()
-		{
-			foreach(var unityProcess in unityProcesses)
-			{
-				if(!unityProcess.hasAddress)
-				{
-					return false;
-				}
-			}
-			return true;
+			return false;
 		}
 		void ScanProcess()
 		{
 			var procs = Process.GetProcesses();
 			foreach(var process in procs)
 			{
-				var runtime = GetUnityRuntime(process);
-				if(runtime == UnityProcess.Runtime.None) { continue; }
-				unityProcesses.Add(new(process, runtime));
+				if(process.ProcessName == "Unity")
+				{
+					unityProcesses.Add(new(process));
+				}
 			}
 		}
-		static UnityProcess.Runtime GetUnityRuntime(Process process)
+		bool Contains(UnityProcess inProcess)
 		{
-			if(RuntimeInformation.IsOSPlatform(OSPlatform.Windows) && process.MainWindowHandle == IntPtr.Zero)
+			foreach(var unityProcess in unityProcesses)
 			{
-				return UnityProcess.Runtime.None;
-			}
-			if(process.ProcessName == "Unity")
-			{
-				return UnityProcess.Runtime.Editor;
-			}
-			if(process.MainModule == null)
-			{
-				return UnityProcess.Runtime.None;
-			}
-			var directory = Path.GetDirectoryName(process.MainModule.FileName);
-			if(directory == null)
-			{
-				return UnityProcess.Runtime.None;
-			}
-			if(RuntimeInformation.IsOSPlatform(OSPlatform.OSX))
-			{
-				var dir = Path.GetDirectoryName(directory);
-				if(dir == null)
+				if(unityProcess.Compare(inProcess))
 				{
-					return UnityProcess.Runtime.None;
-				}
-				if(File.Exists(Path.Combine(dir, "Frameworks", "UnityPlayer.dylib")))
-				{
-					return UnityProcess.Runtime.Player;
+					return true;
 				}
 			}
-			if(RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
+			return false;
+		}
+		static List<IPAddress> IPAddressList()
+		{
+			var ipAddresses = new List<IPAddress>();
+			var networkList = NetworkInterface.GetAllNetworkInterfaces();
+			foreach(var network in networkList)
 			{
-				if(File.Exists(Path.Combine(directory, "UnityPlayer.dll")))
+				if(!network.SupportsMulticast || network.NetworkInterfaceType == NetworkInterfaceType.Loopback || network.OperationalStatus != OperationalStatus.Up)
 				{
-					return UnityProcess.Runtime.Player;
+					continue;
+				}
+				var properties = network.GetIPProperties();
+				if(properties == null) { continue; }
+				var unicastAddresses = properties.UnicastAddresses;
+				foreach(var address in unicastAddresses)
+				{
+					if(address.Address.AddressFamily == AddressFamily.InterNetwork)
+					{
+						ipAddresses.Add(address.Address);
+					}
 				}
 			}
-			if(RuntimeInformation.IsOSPlatform(OSPlatform.Linux))
-			{
-				// TODO Linux
-				return UnityProcess.Runtime.None;
-			}
-			return UnityProcess.Runtime.None;
+			return ipAddresses;
 		}
 		[GeneratedRegex(@"\[IP\]\s(?<IP>\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})\s\[Port\]\s(?<Port>\d+)\s\[Flags\]\s(?<Flags>\d+)\s\[Guid\]\s(?<Guid>\d+)\s\[EditorId\]\s(?<EditorId>\d+)\s\[Version\]\s(?<Version>\d+)\s\[Id\]\s(?<Id>.*?)\s\[Debug\]\s(?<Debug>\d+)\s\[PackageName\]\s(?<PackageName>.*?)\s\[ProjectName\]\s(?<ProjectName>.*)")]
 		private static partial Regex MyRegex();
@@ -168,42 +144,43 @@ namespace UnityDAP
 			Editor,
 			Player
 		}
-		public int Id { get; set; }
 		public string address { get; set; } = string.Empty;
 		public int debugPort { get; set; }
 		public int messagePort { get; set; }
 		public string name { get; set; } = string.Empty;
 		public Runtime runtime { get; set; }
 		public bool hasAddress => !string.IsNullOrEmpty(address);
-		public override string ToString() => $" {name}:{Id} ,address:{address} ,debug:{debugPort}, message:{messagePort}, runtime:{runtime}";
-		public UnityProcess(Process process, Runtime inRuntime)
+		public override string ToString() => $" {name}, address:{address} ,debug:{debugPort}, message:{messagePort}, runtime:{runtime}";
+		public UnityProcess(Process process)
 		{
-			Id = process.Id;
 			if(process.MainModule != null)
 			{
 				name = Path.GetFileNameWithoutExtension(process.MainModule.ModuleName);
 			}
-			debugPort = GetDebugPort();
+			debugPort = GetDebugPort(process.Id);
 			messagePort = GetMessagePort();
-			runtime = inRuntime;
-			if(runtime == Runtime.Editor)
-			{
-				address = "127.0.0.1";
-			}
+			address = "127.0.0.1";
+			runtime = Runtime.Editor;
 		}
-		public void GuidToPorts(string inAddress, long guid)
+		public UnityProcess(string inAddress, string ip, long guid)
 		{
+			name = ip;
 			address = inAddress;
 			debugPort = 56000 + (int)(guid % 1000);
 			messagePort = GetMessagePort();
+			runtime = Runtime.Player;
 		}
-		int GetDebugPort()
+		public bool Compare(UnityProcess inProcess)
 		{
-			return 56000 + (Id % 1000);
+			return name == inProcess.name && address == inProcess.address && debugPort == inProcess.debugPort && messagePort == inProcess.messagePort;
+		}
+		static int GetDebugPort(int inId)
+		{
+			return 56000 + (inId % 1000);
 		}
 		int GetMessagePort()
 		{
-			return GetDebugPort() + 2;
+			return debugPort + 2;
 		}
 	}
 	public class UdpSocketInfo(CancellationTokenSource cts, UdpSocketInfo.Receive receive, IPAddress? address, int port, IPAddress? iface = null, int ttl = 4) : IDisposable
