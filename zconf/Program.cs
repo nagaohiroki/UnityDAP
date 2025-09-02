@@ -6,7 +6,7 @@ namespace zconf
 		static async Task Main(string[] args)
 		{
 			var zconf = new Zconf();
-			await zconf.Start();
+			await zconf.StartMobdev();
 			Console.WriteLine("Hello, World!");
 		}
 	}
@@ -33,6 +33,22 @@ namespace zconf
 				}
 			}
 		}
+		public async Task StartMobdev()
+		{
+			var domain = "_apple-mobdev2._tcp.local.";
+			var hosts = await ZeroconfResolver.ResolveAsync(domain);
+			foreach(var host in hosts)
+			{
+				Console.WriteLine($"  Host: {host.DisplayName}");
+				foreach(var service in host.Services)
+				{
+					Console.WriteLine($"    Service: {service.Key}:{service.Value.Port}");
+				}
+				foreach(var address in host.IPAddresses)
+				{
+					Console.WriteLine($"    Address: {address}");
+				}
+			}
+		}
 	}
 }
-
