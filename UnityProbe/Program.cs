@@ -3,6 +3,7 @@ using System.Net;
 using System.Net.NetworkInformation;
 using System.Net.Sockets;
 using System.Text;
+using System.Text.Json;
 using System.Text.RegularExpressions;
 using Zeroconf;
 namespace UnityProbe
@@ -15,8 +16,15 @@ namespace UnityProbe
 			{
 				Console.WriteLine(arg);
 			}
-			var unityProcesses = new UnityProcessList();
-			await unityProcesses.Create();
+			try
+			{
+				var unityProcesses = new UnityProcessList();
+				await unityProcesses.Create();
+			}
+			catch(Exception ex)
+			{
+				Console.WriteLine(ex);
+			}
 		}
 	}
 	public partial class UnityProcessList
@@ -34,6 +42,12 @@ namespace UnityProbe
 			await UnityPlayerInfo();
 			await iOSRemoteUnityProcess();
 			Console.WriteLine(ToString());
+			CreateJson();
+		}
+		void CreateJson()
+		{
+			var json = JsonSerializer.Serialize(unityProcesses);
+			File.WriteAllText("UnityProcesses.json", json);
 		}
 		async Task UnityPlayerInfo()
 		{
@@ -52,7 +66,7 @@ namespace UnityProbe
 					tasks.Add(Task.Run(socket.StartReceivingLoop));
 				}
 			}
-			int timeoutMilliseconds = 5000;
+			int timeoutMilliseconds = 1000;
 			var timeoutTask = Task.Delay(timeoutMilliseconds);
 			await Task.WhenAny(Task.WhenAll(tasks), timeoutTask);
 			if(timeoutTask.IsCompleted)
@@ -150,54 +164,40 @@ namespace UnityProbe
 	}
 	public class UnityProcess
 	{
-		public enum Platform
-		{
-			Windows,
-			Linux,
-			OSX,
-			iOS,
-			Android,
-			WebGL
-		}
-		public enum Runtime
-		{
-			None,
-			Editor,
-			Player
-		}
 		public string address { get; set; } = string.Empty;
+		public int processId { get; set; }
 		public int debugPort { get; set; }
 		public int messagePort { get; set; }
 		public string name { get; set; } = string.Empty;
-		public Runtime runtime { get; set; }
-		public bool hasAddress => !string.IsNullOrEmpty(address);
-		public override string ToString() => $" {name}, address:{address} ,debug:{debugPort}, message:{messagePort}, runtime:{runtime}";
+		public string runtime { get; set; }
+		public override string ToString() => $" {name}, address:{address} ,debug:{debugPort}, message:{messagePort}, runtime:{runtime}, processId:{processId}";
 		public UnityProcess(Process process)
 		{
 			if(process.MainModule != null)
 			{
-				name = Path.GetFileNameWithoutExtension(process.MainModule.ModuleName);
+				name = Path.GetFileNameWithoutExtension(process.MainModule.ModuleName).Trim('\0');
 			}
+			processId = process.Id;
 			debugPort = GetDebugPort(process.Id);
 			messagePort = GetMessagePort();
 			address = "127.0.0.1";
-			runtime = Runtime.Editor;
+			runtime = "Editor";
 		}
 		public UnityProcess(string inName, string inAddress, int inDebugPort, int inMessagePort)
 		{
-			name = inName;
+			name = inName.Trim('\0');
 			address = inAddress;
 			debugPort = inDebugPort;
 			messagePort = inMessagePort;
-			runtime = Runtime.Player;
+			runtime = "Player";
 		}
 		public UnityProcess(string inAddress, string ip, long guid)
 		{
-			name = ip;
+			name = ip.Trim('\0');
 			address = inAddress;
 			debugPort = 56000 + (int)(guid % 1000);
 			messagePort = GetMessagePort();
-			runtime = Runtime.Player;
+			runtime = "Player";
 		}
 		public bool Compare(UnityProcess inProcess)
 		{
@@ -233,10 +233,11 @@ namespace UnityProbe
 			}
 			catch(OperationCanceledException)
 			{
+				// Console.WriteLine($"canceled: {ex}");
 			}
 			catch(Exception ex)
 			{
-				Console.WriteLine($"error: {ex.Message}");
+				Console.WriteLine($"error: {ex}");
 			}
 			finally
 			{
