@@ -5,6 +5,7 @@ using System.Net.Sockets;
 using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
+using System.CommandLine;
 namespace UnityTargets
 {
 	internal class Program
@@ -22,13 +23,19 @@ namespace UnityTargets
 		}
 		static async Task CreateProcess(string[] args)
 		{
-			int timeout = 500;
-			if(args.Length > 0)
+			var timeoutOption = new Option<int>("--timeout")
 			{
-				timeout = int.Parse(args[0]);
-			}
+				Description = "UDP Timeout in milliseconds",
+				DefaultValueFactory = _ => 500
+			};
+			var rootCommand = new RootCommand("UnityTargets")
+			{
+				timeoutOption
+			};
+			var parseResult = rootCommand.Parse(args);
 			var unityProcesses = new UnityProcessList();
-			await unityProcesses.Create(timeout);
+			Console.WriteLine(parseResult.GetValue(timeoutOption));
+			await unityProcesses.Create(parseResult.GetValue(timeoutOption));
 		}
 	}
 	public partial class UnityProcessList
