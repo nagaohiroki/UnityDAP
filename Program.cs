@@ -34,7 +34,6 @@ namespace UnityTargets
 			};
 			var parseResult = rootCommand.Parse(args);
 			var unityProcesses = new UnityProcessList();
-			Console.WriteLine(parseResult.GetValue(timeoutOption));
 			await unityProcesses.Create(parseResult.GetValue(timeoutOption));
 		}
 	}
