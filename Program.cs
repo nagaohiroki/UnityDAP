@@ -6,6 +6,7 @@ using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using System.CommandLine;
+using Zeroconf;
 namespace UnityTargets
 {
 	internal class Program
@@ -45,7 +46,8 @@ namespace UnityTargets
 		{
 			ScanProcess();
 			await UnityPlayerInfo(timeoutMilliseconds);
-			var json = JsonSerializer.Serialize(unityProcesses);
+			await iOSRemoteUnityProcess();
+			var json = JsonSerializer.Serialize(unityProcesses, new JsonSerializerOptions { WriteIndented = true });
 			Console.WriteLine(json);
 		}
 		async Task UnityPlayerInfo(int timeoutMilliseconds)
@@ -93,7 +95,7 @@ namespace UnityTargets
 			var procs = Process.GetProcesses();
 			foreach(var process in procs)
 			{
-				if(process.ProcessName == "Unity")
+				if(process.ProcessName == "Unity" && process.BasePriority == 8)
 				{
 					unityProcesses.Add(new(process));
 				}
@@ -135,6 +137,25 @@ namespace UnityTargets
 		}
 		[GeneratedRegex(@"\[IP\]\s(?<IP>\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})\s\[Port\]\s(?<Port>\d+)\s\[Flags\]\s(?<Flags>\d+)\s\[Guid\]\s(?<Guid>\d+)\s\[EditorId\]\s(?<EditorId>\d+)\s\[Version\]\s(?<Version>\d+)\s\[Id\]\s(?<Id>.*?)\s\[Debug\]\s(?<Debug>\d+)\s\[PackageName\]\s(?<PackageName>.*?)\s\[ProjectName\]\s(?<ProjectName>.*)")]
 		private static partial Regex MyRegex();
+		static async Task<List<string>> SearchZconf(string domain)
+		{
+			var hosts = await ZeroconfResolver.ResolveAsync(domain);
+			List<string> addresses = [];
+			foreach(var host in hosts)
+			{
+				addresses.Add(host.IPAddress);
+			}
+			return addresses;
+		}
+		async Task iOSRemoteUnityProcess()
+		{
+			var zconf = await SearchZconf("_apple-mobdev2._tcp.local.");
+			foreach(var address in zconf)
+			{
+				var proc = new UnityProcess("iOSPlayer", address, 56000, 55000);
+				unityProcesses.Add(proc);
+			}
+		}
 	}
 	public class UnityProcess
 	{
@@ -142,7 +163,6 @@ namespace UnityTargets
 		public int debugPort { get; set; }
 		public int messagePort { get; set; }
 		public int pid { get; set; }
-		public int priority { get; set; }
 		public string name { get; set; } = string.Empty;
 		public string runtime { get; set; }
 		public string description { get; set; } = string.Empty;
@@ -157,7 +177,6 @@ namespace UnityTargets
 			address = "127.0.0.1";
 			runtime = "Editor";
 			pid = process.Id;
-			priority = process.BasePriority;
 		}
 		public UnityProcess(string inAddress, string ip, long guid)
 		{
@@ -165,6 +184,14 @@ namespace UnityTargets
 			address = inAddress;
 			debugPort = 56000 + (int)(guid % 1000);
 			messagePort = GetMessagePort();
+			runtime = "Player";
+		}
+		public UnityProcess(string inName, string inAddress, int inDebugPort, int inMessagePort)
+		{
+			name = inName.Trim('\0');
+			address = inAddress;
+			debugPort = inDebugPort;
+			messagePort = inMessagePort;
 			runtime = "Player";
 		}
 		public bool Compare(UnityProcess inProcess)
