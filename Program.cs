@@ -47,7 +47,7 @@ namespace UnityTargets
 			ScanProcess();
 			await UnityPlayerInfo(timeoutMilliseconds);
 			await iOSRemoteUnityProcess();
-			var json = JsonSerializer.Serialize(unityProcesses, new JsonSerializerOptions { WriteIndented = true });
+			var json = JsonSerializer.Serialize(unityProcesses/*, new JsonSerializerOptions { WriteIndented = true }*/);
 			Console.WriteLine(json);
 		}
 		async Task UnityPlayerInfo(int timeoutMilliseconds)
