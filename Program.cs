@@ -27,7 +27,22 @@ namespace UnityTargets
 			var timeoutOption = new Option<int>("--timeout")
 			{
 				Description = "UDP Timeout in milliseconds",
-				DefaultValueFactory = _ => 500
+				DefaultValueFactory = _ => 1000
+			};
+			var excludeEditor = new Option<bool>("--exclude-editor")
+			{
+				Description = "Exclude Editor processes",
+				DefaultValueFactory = _ => false
+			};
+			var excludePlayer = new Option<bool>("--exclude-player")
+			{
+				Description = "Exclude Player processes",
+				DefaultValueFactory = _ => false
+			};
+			var excludeiOS = new Option<bool>("--exclude-ios")
+			{
+				Description = "Exclude iOS Player processes",
+				DefaultValueFactory = _ => false
 			};
 			var rootCommand = new RootCommand("UnityTargets")
 			{
@@ -35,19 +50,35 @@ namespace UnityTargets
 			};
 			var parseResult = rootCommand.Parse(args);
 			var unityProcesses = new UnityProcessList();
-			await unityProcesses.Create(parseResult.GetValue(timeoutOption));
+			var options = new UnityProcessList.Options
+			{
+				excludeEditor = parseResult.GetValue(excludeEditor),
+				excludePlayer = parseResult.GetValue(excludePlayer),
+				excludeiOS = parseResult.GetValue(excludeiOS),
+				timeoutMilliseconds = parseResult.GetValue(timeoutOption)
+			};
+			await unityProcesses.Create(options);
 		}
 	}
 	public partial class UnityProcessList
 	{
+		public class Options
+		{
+			public bool excludeEditor { get; set; }
+			public bool excludePlayer { get; set; }
+			public bool excludeiOS { get; set; }
+			public int timeoutMilliseconds { get; set; }
+		}
 		readonly List<UnityProcess> unityProcesses = [];
 		readonly Regex parseUnityInfo = MyRegex();
-		public async Task Create(int timeoutMilliseconds)
+		public Options options { get; set; } = new();
+		public async Task Create(Options inOptions)
 		{
-			ScanProcess();
-			await UnityPlayerInfo(timeoutMilliseconds);
-			await iOSRemoteUnityProcess();
-			var json = JsonSerializer.Serialize(unityProcesses/*, new JsonSerializerOptions { WriteIndented = true }*/);
+			options = inOptions;
+			if(!options.excludeEditor) { ScanProcess(); }
+			if(!options.excludePlayer) { await UnityPlayerInfo(inOptions.timeoutMilliseconds); }
+			if(!options.excludeiOS) { await iOSRemoteUnityProcess(); }
+			var json = JsonSerializer.Serialize(unityProcesses);
 			Console.WriteLine(json);
 		}
 		async Task UnityPlayerInfo(int timeoutMilliseconds)
@@ -82,9 +113,11 @@ namespace UnityTargets
 			var projectName = match.Groups["ProjectName"].Value;
 			var guidStr = match.Groups["Guid"].Value;
 			var ip = match.Groups["IP"].Value;
+			var id = match.Groups["Id"].Value;
 			if(long.TryParse(guidStr, out var guid))
 			{
-				var process = new UnityProcess(ip, projectName, guid);
+				var name = $"{projectName.Trim('\0')} {id}";
+				var process = new UnityProcess(ip, name, guid, infoText);
 				if(Contains(process)) { return true; }
 				unityProcesses.Add(process);
 			}
@@ -168,25 +201,27 @@ namespace UnityTargets
 		public string description { get; set; } = string.Empty;
 		public UnityProcess(Process process)
 		{
-			if(process.MainModule != null)
-			{
-				name = Path.GetFileNameWithoutExtension(process.MainModule.ModuleName).Trim('\0');
-			}
 			debugPort = GetDebugPort(process.Id);
 			messagePort = GetMessagePort();
 			address = "127.0.0.1";
 			runtime = "Editor";
 			pid = process.Id;
+			if(process.MainModule != null)
+			{
+				var processName = Path.GetFileNameWithoutExtension(process.MainModule.ModuleName).Trim('\0');
+				name = $"{processName} {runtime}, pid:{pid}";
+			}
 		}
-		public UnityProcess(string inAddress, string ip, long guid)
+		public UnityProcess(string inAddress, string inName, long guid, string infoText)
 		{
-			name = ip.Trim('\0');
+			name = inName;
 			address = inAddress;
 			debugPort = 56000 + (int)(guid % 1000);
 			messagePort = GetMessagePort();
 			runtime = "Player";
+			description = infoText;
 		}
-		public UnityProcess(string inName, string inAddress, int inDebugPort, int inMessagePort)
+		public UnityProcess(string inAddress, string inName, int inDebugPort, int inMessagePort)
 		{
 			name = inName.Trim('\0');
 			address = inAddress;
