@@ -24,40 +24,29 @@ namespace UnityTargets
 		}
 		static async Task CreateProcess(string[] args)
 		{
-			var timeoutOption = new Option<int>("--timeout")
-			{
-				Description = "UDP Timeout in milliseconds",
-				DefaultValueFactory = _ => 1000
-			};
-			var excludeEditor = new Option<bool>("--exclude-editor")
-			{
-				Description = "Exclude Editor processes",
-				DefaultValueFactory = _ => false
-			};
-			var excludePlayer = new Option<bool>("--exclude-player")
-			{
-				Description = "Exclude Player processes",
-				DefaultValueFactory = _ => false
-			};
-			var excludeiOS = new Option<bool>("--exclude-ios")
-			{
-				Description = "Exclude iOS Player processes",
-				DefaultValueFactory = _ => false
-			};
+			var timeoutOption = new Option<int>("--timeout") { Description = "UDP Timeout in milliseconds", DefaultValueFactory = _ => 1000 };
+			var excludeEditor = new Option<bool>("--exclude-editor") { Description = "Exclude Editor processes", DefaultValueFactory = _ => false };
+			var excludePlayer = new Option<bool>("--exclude-player") { Description = "Exclude Player processes", DefaultValueFactory = _ => false };
+			var excludeiOS = new Option<bool>("--exclude-ios") { Description = "Exclude iOS Player processes", DefaultValueFactory = _ => false };
 			var rootCommand = new RootCommand("UnityTargets")
 			{
-				timeoutOption
+				timeoutOption,
+				excludeEditor,
+				excludePlayer,
+				excludeiOS,
 			};
-			var parseResult = rootCommand.Parse(args);
-			var unityProcesses = new UnityProcessList();
-			var options = new UnityProcessList.Options
+			rootCommand.SetAction(async result =>
 			{
-				excludeEditor = parseResult.GetValue(excludeEditor),
-				excludePlayer = parseResult.GetValue(excludePlayer),
-				excludeiOS = parseResult.GetValue(excludeiOS),
-				timeoutMilliseconds = parseResult.GetValue(timeoutOption)
-			};
-			await unityProcesses.Create(options);
+				var unityProcesses = new UnityProcessList();
+				await unityProcesses.Create(new()
+				{
+					excludeEditor = result.GetValue(excludeEditor),
+					excludePlayer = result.GetValue(excludePlayer),
+					excludeiOS = result.GetValue(excludeiOS),
+					timeoutMilliseconds = result.GetValue(timeoutOption),
+				});
+			});
+			rootCommand.Parse(args).Invoke();
 		}
 	}
 	public partial class UnityProcessList
@@ -209,25 +198,25 @@ namespace UnityTargets
 			if(process.MainModule != null)
 			{
 				var processName = Path.GetFileNameWithoutExtension(process.MainModule.ModuleName).Trim('\0');
-				name = $"{processName} {runtime}, pid:{pid}";
+				name = $"{processName} {runtime}, pid:{pid}, debugPort:{debugPort}";
 			}
 		}
 		public UnityProcess(string inAddress, string inName, long guid, string infoText)
 		{
-			name = inName;
 			address = inAddress;
 			debugPort = 56000 + (int)(guid % 1000);
 			messagePort = GetMessagePort();
 			runtime = "Player";
 			description = infoText;
+			name = $"{inName}, debugPort:{debugPort}";
 		}
 		public UnityProcess(string inAddress, string inName, int inDebugPort, int inMessagePort)
 		{
-			name = inName.Trim('\0');
 			address = inAddress;
 			debugPort = inDebugPort;
 			messagePort = inMessagePort;
 			runtime = "Player";
+			name = $"{inName.Trim('\0')}, debugPort:{debugPort}";
 		}
 		public bool Compare(UnityProcess inProcess)
 		{
